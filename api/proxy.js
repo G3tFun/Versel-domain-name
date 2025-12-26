@@ -1,30 +1,50 @@
-// api/proxy.js
-module.exports = async (req, res) => {
-    const { url } = req.query; // Получаем целевой URL из параметра запроса
+const cheerio = require('cheerio'); // Импортируем cheerio
 
-    if (!url) {
+module.exports = async (req, res) => {
+    const { url: targetUrl } = req.query; // Изменил имя переменной для ясности
+
+    if (!targetUrl) {
         return res.status(400).send('URL parameter is required.');
     }
 
     try {
-        const response = await fetch(url);
+        const response = await fetch(targetUrl);
 
-        // Обработка ошибок HTTP
         if (!response.ok) {
             return res.status(response.status).send(`Failed to fetch: ${response.statusText}`);
         }
 
-        // Устанавливаем заголовки, чтобы предотвратить CORS на прокси-стороне
-        // и передаем тип контента. Будьте осторожны с заголовками!
-        // Для реального проксирования лучше передавать все заголовки
-        // от оригинального ответа, кроме тех, что влияют на безопасность
-        // или являются Hop-by-Hop.
-        res.setHeader('Access-Control-Allow-Origin', '*'); // Разрешаем всем доменам доступ к этому прокси
-        res.setHeader('Content-Type', response.headers.get('Content-Type') || 'text/html'); // Передаем оригинальный Content-Type
+        const contentType = response.headers.get('Content-Type') || 'text/html';
+        let content = await response.text();
 
-        // Возвращаем содержимое целевой страницы
-        const text = await response.text();
-        res.send(text);
+        // Только для HTML контента пытаемся перезаписывать ссылки
+        if (contentType.includes('text/html')) {
+            const $ = cheerio.load(content); // Загружаем HTML в Cheerio
+
+            // Перезаписываем ссылки <a>
+            $('a').each((i, link) => {
+                const href = $(link).attr('href');
+                if (href) {
+                    const absoluteHref = new URL(href, targetUrl).href; // Преобразуем в абсолютный URL
+                    $(link).attr('href', `/api/proxy?url=${encodeURIComponent(absoluteHref)}`);
+                }
+            });
+
+            // !!! ВНИМАНИЕ: Это минимальный пример.
+            // Вам нужно будет переписать гораздо больше:
+            // - src атрибуты (img, script, link[rel="stylesheet"])
+            // - action атрибуты (form)
+            // - background-image в CSS
+            // - JavaScript, который динамически создает ссылки или делает fetch-запросы
+            // Это очень сложная задача!
+
+            content = $.html(); // Получаем измененный HTML
+        }
+
+
+        res.setHeader('Access-Control-Allow-Origin', '*');
+        res.setHeader('Content-Type', contentType);
+        res.send(content);
 
     } catch (error) {
         console.error('Proxy error:', error);
